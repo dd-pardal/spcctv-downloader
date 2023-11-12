@@ -166,10 +166,10 @@ for (const { position, hash } of streams) {
 			for (endIndex = chunks.length - 1; endIndex >= startIndex && chunks[endIndex].timestamp >= endAt; endIndex--);
 			endIndex++;
 		}
-		console.log(startIndex, endIndex);
+		// console.log(startIndex, endIndex);
 
 		if (startIndex >= endIndex) {
-			console.log(`Nothing to download.  pos: ${position}  end of last file: ${startAt ? formatTimestampJST(startAt) : "(no prev files)"}  latest chunk available: ${chunks.length === 0 ? "(no chunks)" : formatTimestampJST(chunks.at(-1)!.timestamp)}`);
+			console.log(`Nothing to download.  pos: ${position}  requested start: ${startAt ? formatTimestampJST(startAt) : "(no prev files)"}  latest chunk available: ${chunks.length === 0 ? "(no chunks)" : formatTimestampJST(chunks.at(-1)!.timestamp)}`);
 		} else {
 			console.log(`\
 [START] pos: ${position}
