@@ -1,41 +1,47 @@
 import * as fs from "node:fs";
 import { formatTimestampJST, formatTimestampJSTFile, parseDuration, parseTimestamp } from "./time-formats.js";
 
-function parseTimestampOrLast(str: string) {
-	if (str === "LAST") {
-		return "last";
+function parseTimestampOrKeyword(str: string) {
+	if (str === "PREV") {
+		return "prev";
+	} else if (str === "EARLIEST") {
+		return "earliest"
 	} else {
 		return parseTimestamp(str);
 	}
 }
 
-function parseTimeRange(str: string): [number | "last", number] {
+function parseTimeRange(str: string): {
+	start: number | "prev" | "earliest",
+	value: number,
+	valueType: "duration" | "end",
+} {
 	const split = str.toUpperCase().split(/\s*(?:\/|--)\s*/);
 
 	if (split.length === 1) {
 		try {
-			const start = parseTimestampOrLast(split[0]);
-			return [start, Date.now()];
+			const start = parseTimestampOrKeyword(split[0]);
+			return { start, value: Infinity, valueType: "end" };
 		} catch { }
 		try {
 			const duration = parseDuration(split[0]);
-			return [Date.now() - duration, Date.now()];
+			return { start: Date.now() - duration, value: duration, valueType: "duration" };
 		} catch { }
 	} else if (split.length === 2) {
 		try {
-			const start = parseTimestampOrLast(split[0]);
+			const start = parseTimestampOrKeyword(split[0]);
 			const end = parseTimestamp(split[1]);
-			return [start, end];
+			return { start: start, value: end, valueType: "end" };
 		} catch { }
 		try {
-			const start = parseTimestamp(split[0]);
+			const start = parseTimestampOrKeyword(split[0]);
 			const duration = parseDuration(split[1]);
-			return [start, start + duration];
+			return { start: start, value: duration, valueType: "duration" };
 		} catch { }
 		try {
 			const duration = parseDuration(split[0]);
 			const end = parseTimestamp(split[1]);
-			return [end - duration, end];
+			return { start: end - duration, value: end, valueType: "end" };
 		} catch { }
 	}
 	throw new SyntaxError(`Malformed time range: ${str}`);
@@ -69,30 +75,36 @@ Input time in JST unless otherwise specified.
 let dir = process.argv[2];
 if (dir.endsWith("/") || dir.endsWith("\\")) dir = dir.slice(0, -1);
 
-const streams = [{
-	position: "ce",
-	hash: "17425af0367545d4a1de3642c082dec4"
-}, {
-	position: "br",
-	hash: "6025d69a4ed6447b8e9fafa4ec4e85ba"
-}, {
-	position: "tr",
-	hash: "02e91b7892ee4123975c5d3eeefc7528"
-}, {
-	position: "bl",
-	hash: "f62f28768fe54aadac6294cab7864b7e"
-}, {
-	position: "tl",
-	hash: "d7b374ed685d4790a8fa09c549aefcaf"
-}];
+const streams = [
+	{
+		position: "tl",
+		hash: "5b846d97b16e4e6e88256232bf75aff9"
+	},
+	{
+		position: "bl",
+		hash: "40d91efdfb344b829e6fa37f3c9ab3b7"
+	},
+	{
+		position: "ce",
+		hash: "45caeddc667940d28056f5e13d0e73c1"
+	},
+	{
+		position: "tr",
+		hash: "0b10995ee1f348fb8f6829e3b208151c"
+	},
+	{
+		position: "br",
+		hash: "548bef06d1b4423ab8b84810a28e3b9c"
+	},
+];
 
 
 let stop = false;
 
-const ranges = new Map<string, { start: number; end: number; }>();
-const [start, end] = parseTimeRange(process.argv[3]);
+const lastFilesEndTimestamps = new Map<string, number>();
+const timeRange = parseTimeRange(process.argv[3]);
 
-if (start === "last") {
+if (timeRange.start === "prev") {
 	const fileTimestampRegex = /(?<=--)2023-.*?(?=_)/;
 	const filenames = fs.readdirSync(dir);
 	for (const stream of streams) {
@@ -101,19 +113,9 @@ if (start === "last") {
 			throw new Error(`There are no files in the directory for the ${stream.position} monitor.`);
 		}
 		const filename = streamFilenames.sort().at(-1)!;
-		const streamStart = new Date(filename.match(fileTimestampRegex)![0].replaceAll(";", ":") + "Z").getTime() - 9 * 60 * 60 * 1000;
-		if (Number.isNaN(streamStart)) throw new Error("Failed to parse filename");
-		ranges.set(stream.position, {
-			start: streamStart,
-			end: end,
-		});
-	}
-} else {
-	for (const stream of streams) {
-		ranges.set(stream.position, {
-			start: start,
-			end: end,
-		});
+		const endTimestamp = new Date(filename.match(fileTimestampRegex)![0].replaceAll(";", ":") + "Z").getTime() - 9 * 60 * 60 * 1000;
+		if (Number.isNaN(endTimestamp)) throw new Error("Failed to parse filename");
+		lastFilesEndTimestamps.set(stream.position, endTimestamp);
 	}
 }
 
@@ -125,8 +127,6 @@ type Chunk = {
 
 for (const { position, hash } of streams) {
 	(async () => {
-		const { start: startAt, end: endAt } = ranges.get(position)!;
-
 		const url = `https://bcovlive-a.akamaihd.net/${hash}/us-east-1/6415716420001/profile_0/`;
 
 		const playlist = await (await fetch(url + "chunklist_dvr.m3u8")).text();
@@ -154,19 +154,26 @@ for (const { position, hash } of streams) {
 			}
 		}
 
+		let startAt: number, endAt: number;
+		if (timeRange.start === "prev") {
+			startAt = lastFilesEndTimestamps.get(position)!;
+		} else if (timeRange.start === "earliest") {
+			startAt = chunks[0].timestamp;
+		} else {
+			startAt = timeRange.start;
+		}
+		endAt = timeRange.valueType === "duration" ? (startAt + timeRange.value) : timeRange.value;
+
 		let startIndex = 0;
-		// TODO: start at earliest time possible
-		if (startAt) {
-			// If the start timestamp coincides with the chunk start timestamp, include it
-			for (; startIndex < chunks.length && chunks[startIndex].timestamp + chunks[startIndex].length <= startAt; startIndex++);
-		}
+		// If the start timestamp coincides with the chunk start timestamp, include it
+		for (; startIndex < chunks.length && chunks[startIndex].timestamp + chunks[startIndex].length <= startAt; startIndex++);
+
 		let endIndex = chunks.length;
-		if (endAt) {
-			// If the end timestamp coincides with the chunk start timestamp, don't include it
-			for (endIndex = chunks.length - 1; endIndex >= startIndex && chunks[endIndex].timestamp >= endAt; endIndex--);
-			endIndex++;
-		}
-		// console.log(startIndex, endIndex);
+		// If the end timestamp coincides with the chunk start timestamp, don't include it
+		for (endIndex = chunks.length - 1; endIndex >= startIndex && chunks[endIndex].timestamp >= endAt; endIndex--);
+		endIndex++;
+
+		console.log(startIndex, endIndex);
 
 		if (startIndex >= endIndex) {
 			console.log(`Nothing to download.  pos: ${position}  requested start: ${startAt ? formatTimestampJST(startAt) : "(no prev files)"}  latest chunk available: ${chunks.length === 0 ? "(no chunks)" : formatTimestampJST(chunks.at(-1)!.timestamp)}`);
@@ -174,14 +181,14 @@ for (const { position, hash } of streams) {
 			console.log(`\
 [START] pos: ${position}
     earliest chunk available: ${formatTimestampJST(chunks[0].timestamp)}
-${start !== "last" ? "" : `\
-    end of last file:         ${startAt ? formatTimestampJST(startAt) : "(no prev files)"}\n`}\
+${timeRange.start !== "prev" ? "" : `\
+    end of previous file:     ${startAt ? formatTimestampJST(startAt) : "(no prev files)"}\n`}\
     start of this file:       ${formatTimestampJST(chunks[startIndex].timestamp)}
     end of this file:         ${formatTimestampJST(chunks[endIndex-1].timestamp + chunks[endIndex-1].length)}
-${start !== "last" ? "" : startAt === chunks[startIndex].timestamp ? `\
+${timeRange.start !== "prev" ? "" : startAt === chunks[startIndex].timestamp ? `\
     no gap
 ` : `\
-    there's a gap between this and the last file!
+    there's a gap between this and the previous file!
 `}`.slice(0, -1));
 			const filename = `${dir}/PARTIAL_${formatTimestampJSTFile(chunks[startIndex].timestamp)}_${position}.mts`;
 			const stream = fs.createWriteStream(filename);
