@@ -78,23 +78,23 @@ if (dir.endsWith("/") || dir.endsWith("\\")) dir = dir.slice(0, -1);
 const streams = [
 	{
 		position: "tl",
-		hash: "5b846d97b16e4e6e88256232bf75aff9"
+		hash: "ba30e440828e43d28abd720f8d41f3c6"
 	},
 	{
 		position: "bl",
-		hash: "40d91efdfb344b829e6fa37f3c9ab3b7"
+		hash: "e253daf9e2aa4759b51fd8a64dd49786"
 	},
 	{
 		position: "ce",
-		hash: "45caeddc667940d28056f5e13d0e73c1"
+		hash: "e2a54d45912b4d778066066912f95904"
 	},
 	{
 		position: "tr",
-		hash: "0b10995ee1f348fb8f6829e3b208151c"
+		hash: "3d44c0bd7fc54198a92213402ed400b4"
 	},
 	{
 		position: "br",
-		hash: "548bef06d1b4423ab8b84810a28e3b9c"
+		hash: "a9b4aacbe7da4af6a61111c10f21a024"
 	},
 ];
 
