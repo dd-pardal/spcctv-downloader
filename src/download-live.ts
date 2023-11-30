@@ -1,47 +1,93 @@
 import * as fs from "node:fs";
 import { formatTimestampJST, formatTimestampJSTFile, parseDuration, parseTimestamp } from "./time-formats.js";
 
-function parseTimestampOrKeyword(str: string) {
+function parseTimestampOrKeyword(str: string): number | "prev" | "earliest" | "latest" {
 	if (str === "PREV") {
 		return "prev";
 	} else if (str === "EARLIEST") {
-		return "earliest"
+		return "earliest";
+	} else if (str === "LATEST") {
+		return "latest";
 	} else {
 		return parseTimestamp(str);
 	}
 }
 
-function parseTimeRange(str: string): {
-	start: number | "prev" | "earliest",
-	value: number,
-	valueType: "duration" | "end",
-} {
+type TimeRange =
+	{
+		start: number;
+		end: number; // May be Infinity
+		duration: undefined;
+	} |
+	{
+		start: "prev" | "earliest";
+	} & (
+		{
+			end: number; // May be Infinity
+			duration: undefined;
+		} |
+		{
+			end: undefined;
+			duration: number;
+		}
+	) |
+	{
+		end: "latest";
+	} & (
+		{
+			start: number;
+			duration: undefined;
+		} |
+		{
+			start: undefined;
+			duration: number;
+		}
+	);
+
+function parseTimeRange(str: string): TimeRange {
 	const split = str.toUpperCase().split(/\s*(?:\/|--)\s*/);
 
 	if (split.length === 1) {
 		try {
 			const start = parseTimestampOrKeyword(split[0]);
-			return { start, value: Infinity, valueType: "end" };
+			if (start === "latest") throw null;
+			return {
+				start,
+				end: Infinity,
+				duration: undefined,
+			};
 		} catch { }
 		try {
 			const duration = parseDuration(split[0]);
-			return { start: Date.now() - duration, value: duration, valueType: "duration" };
+			const now = Date.now();
+			return { start: now - duration, end: now, duration: undefined, };
 		} catch { }
 	} else if (split.length === 2) {
 		try {
 			const start = parseTimestampOrKeyword(split[0]);
+			if (start === "latest") throw null;
 			const end = parseTimestamp(split[1]);
-			return { start: start, value: end, valueType: "end" };
+			return { start, end, duration: undefined };
 		} catch { }
 		try {
 			const start = parseTimestampOrKeyword(split[0]);
+			if (start === "latest") throw null;
 			const duration = parseDuration(split[1]);
-			return { start: start, value: duration, valueType: "duration" };
+			if (typeof start === "number") {
+				return { start, end: start + duration, duration: undefined};
+			} else {
+				return { start, end: undefined, duration};
+			}
 		} catch { }
 		try {
 			const duration = parseDuration(split[0]);
-			const end = parseTimestamp(split[1]);
-			return { start: end - duration, value: end, valueType: "end" };
+			const end = parseTimestampOrKeyword(split[1]);
+			if (end === "prev" || end === "earliest") throw null;
+			if (typeof end === "number") {
+				return { start: end - duration, end, duration: undefined};
+			} else {
+				return { start: undefined, end, duration };
+			}
 		} catch { }
 	}
 	throw new SyntaxError(`Malformed time range: ${str}`);
@@ -155,14 +201,19 @@ for (const { position, hash } of streams) {
 		}
 
 		let startAt: number, endAt: number;
-		if (timeRange.start === "prev") {
-			startAt = lastFilesEndTimestamps.get(position)!;
-		} else if (timeRange.start === "earliest") {
-			startAt = chunks[0].timestamp;
+		if (timeRange.end === "latest") {
+			endAt = chunks.at(-1)!.timestamp + chunks.at(-1)!.length;
+			startAt = timeRange.duration !== undefined ? (endAt - timeRange.duration) : timeRange.start;
 		} else {
-			startAt = timeRange.start;
+			if (timeRange.start === "prev") {
+				startAt = lastFilesEndTimestamps.get(position)!;
+			} else if (timeRange.start === "earliest") {
+				startAt = chunks[0].timestamp;
+			} else {
+				startAt = timeRange.start;
+			}
+			endAt = timeRange.duration !== undefined ? (startAt + timeRange.duration) : timeRange.end;
 		}
-		endAt = timeRange.valueType === "duration" ? (startAt + timeRange.value) : timeRange.value;
 
 		let startIndex = 0;
 		// If the start timestamp coincides with the chunk start timestamp, include it
